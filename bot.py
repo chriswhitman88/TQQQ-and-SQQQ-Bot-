@@ -1,122 +1,110 @@
 import os
+import datetime
 import pandas as pd
-from datetime import datetime, timezone
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
 
-# Fetch keys securely from GitHub environment variables
-API_KEY = os.getenv('APCA_API_KEY_ID')
-SECRET_KEY = os.getenv('APCA_API_SECRET_KEY')
+# 1. Fetch and sanitize API credentials
+API_KEY = (os.getenv("API_KEY") or os.getenv("APCA_API_KEY_ID") or "").strip()
+SECRET_KEY = (os.getenv("SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") or "").strip()
 
-# Initialize Alpaca clients in paper mode
+if not API_KEY or not SECRET_KEY:
+    raise ValueError("Missing or invalid Alpaca API credentials. Ensure secrets are set properly.")
+
+# 2. Initialize Alpaca clients
 trading_client = TradingClient(api_key=API_KEY, secret_key=SECRET_KEY, paper=True)
 data_client = StockHistoricalDataClient(api_key=API_KEY, secret_key=SECRET_KEY)
 
-def run_strategy_with_execution():
-    print("Fetching latest hourly market data from Alpaca...")
+def get_market_data(symbol="QQQ", timeframe=TimeFrame.Hour, limit=100):
+    """Fetches historical stock bars to calculate indicators."""
+    end_dt = datetime.datetime.now(datetime.timezone.utc)
+    start_dt = end_dt - datetime.timedelta(days=15)
     
-    symbols = ["TQQQ", "SQQQ", "QQQ"]
     request_params = StockBarsRequest(
-        symbol_or_symbols=symbols,
-        timeframe=TimeFrame.Hour,
-        limit=1500
+        symbol_or_symbols=symbol,
+        timeframe=timeframe,
+        start=start_dt,
+        end=end_dt
     )
     
     bars = data_client.get_stock_bars(request_params)
-    df_dict = {}
-    
-    for symbol in symbols:
-        try:
-            df_dict[symbol] = bars.df.loc[symbol]
-        except KeyError:
-            print(f"Warning: Could not fetch data for {symbol}")
-            
-    if "TQQQ" not in df_dict:
-        print("Data fetch incomplete. Retrying later.")
-        return
+    df = bars.df
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.xs(symbol)
+    return df
 
-    tqqq_df = df_dict["TQQQ"]
+def calculate_indicators(df):
+    """Calculates EMA and RSI indicators for decision logic."""
+    df['EMA_9'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['EMA_21'] = df['close'].ewm(span=21, adjust=False).mean()
     
-    # --- Indicator Calculations ---
-    tqqq_df['EMA_5'] = tqqq_df['close'].ewm(span=5, adjust=False).mean()
-    tqqq_df['EMA_13'] = tqqq_df['close'].ewm(span=13, adjust=False).mean()
-    
-    delta = tqqq_df['close'].diff()
+    delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rs = gain / loss
-    tqqq_df['RSI'] = 100 - (100 / (1 + rs))
+    df['RSI'] = 100 - (100 / (1 + rs))
     
-    latest = tqqq_df.iloc[-1]
-    current_price = latest['close']
-    ema_5 = latest['EMA_5']
-    ema_13 = latest['EMA_13']
-    rsi = latest['RSI']
-    
-    print(f"\n--- Latest Bar Analysis (TQQQ) ---")
-    print(f"Price: ${current_price:.2f} | EMA 5: ${ema_5:.2f} | EMA 13: ${ema_13:.2f} | RSI: {rsi:.1f}")
-    
-    # Check current open positions in your paper account
+    return df
+
+def execute_rotation(target_symbol):
+    """Sells existing opposite leverage position and buys target asset."""
     positions = trading_client.get_all_positions()
-    position_map = {p.symbol: p for p in positions if p.symbol in ["TQQQ", "SQQQ"]}
+    current_symbols = [p.symbol for p in positions]
     
-    # --- Strategy Signal Logic ---
-    is_bullish = (ema_5 > ema_13) and (rsi > 50)
-    is_bearish = ema_5 < ema_13
-    
-    target_symbol = None
-    if is_bullish:
-        target_symbol = "TQQQ"
-        print("Signal: BULLISH -> Target is TQQQ")
-    elif is_bearish:
-        target_symbol = "SQQQ"
-        print("Signal: BEARISH -> Target is SQQQ")
-    else:
-        print("Signal: NEUTRAL -> Maintaining current state.")
+    # Close positions in the opposing ticker if present
+    opposite_symbol = "SQQQ" if target_symbol == "TQQQ" else "TQQQ"
+    if opposite_symbol in current_symbols:
+        print(f"Closing position in {opposite_symbol}...")
+        trading_client.close_position(opposite_symbol)
+        
+    # Check if already holding target symbol
+    if target_symbol in current_symbols:
+        print(f"Already holding target symbol: {target_symbol}. No trade needed.")
         return
 
-    # --- Automated Order Execution Logic ---
-    holding_target = target_symbol in position_map
+    # Account buying power check
+    account = trading_client.get_account()
+    buying_power = float(account.buying_power)
     
-    if not holding_target:
-        print(f"Executing rotation to {target_symbol}...")
-        
-        # 1. Close any existing opposite positions first
-        for sym in list(position_map.keys()):
-            if sym != target_symbol:
-                print(f"Liquidating existing position in {sym}...")
-                trading_client.close_position(sym)
-        
-        # 2. Calculate position size using available cash (95% allocation)
-        account = trading_client.get_account()
-        available_cash = float(account.cash) * 0.95
-        
-        target_price = df_dict[target_symbol].iloc[-1]['close']
-        shares_to_buy = int(available_cash / target_price)
-        
-        if shares_to_buy > 0:
-            # Add a slight limit offset buffer to ensure fill
-            limit_price = round(target_price * 1.001, 2)
-            print(f"Submitting paper buy order: {shares_to_buy} shares of {target_symbol} at ${limit_price}...")
-            
-            order_data = LimitOrderRequest(
-                symbol=target_symbol,
-                qty=shares_to_buy,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
-                limit_price=limit_price
-            )
-            
-            response = trading_client.submit_order(order_data)
-            print(f"Paper Order Successfully Placed! Order ID: {response.id}")
-        else:
-            print("Insufficient cash balance to purchase shares.")
+    if buying_power > 100:
+        print(f"Submitting market order for {target_symbol} using available cash...")
+        order_data = MarketOrderRequest(
+            symbol=target_symbol,
+            notional=round(buying_power * 0.95, 2),  # Use 95% of available funds
+            side=OrderSide.BUY,
+            time_in_force=TimeInForce.GTC
+        )
+        order = trading_client.submit_order(order_data)
+        print(f"Order executed for {target_symbol}: ID {order.id}")
     else:
-        print(f"Already holding target symbol ({target_symbol}). No rebalance needed.")
+        print("Insufficient buying power to execute order.")
+
+def run_strategy_with_execution():
+    """Main execution entry point."""
+    print("Fetching latest hourly market data from Alpaca...")
+    df = get_market_data("QQQ")
+    df = calculate_indicators(df)
+    
+    latest = df.iloc[-1]
+    ema_9 = latest['EMA_9']
+    ema_21 = latest['EMA_21']
+    rsi = latest['RSI']
+    
+    print(f"Latest QQQ Data | Close: {latest['close']:.2f} | EMA9: {ema_9:.2f} | EMA21: {ema_21:.2f} | RSI: {rsi:.2f}")
+    
+    # Strategy Decision Logic
+    if ema_9 > ema_21 and rsi > 45:
+        print("Signal: BULLISH -> Rotating to TQQQ")
+        execute_rotation("TQQQ")
+    elif ema_9 < ema_21 and rsi < 55:
+        print("Signal: BEARISH -> Rotating to SQQQ")
+        execute_rotation("SQQQ")
+    else:
+        print("Signal: NEUTRAL -> Holding current positions.")
 
 if __name__ == "__main__":
     run_strategy_with_execution()
