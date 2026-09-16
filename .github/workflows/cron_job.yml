@@ -29,3 +29,4 @@ jobs:
           BOT_PATH=$(find . -name "bot.py" | head -n 1)
           echo "Found bot at: $BOT_PATH"
           python "$BOT_PATH"
+
