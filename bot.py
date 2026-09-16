@@ -78,7 +78,7 @@ def execute_rotation(target_symbol):
             symbol=target_symbol,
             notional=round(buying_power * 0.95, 2),
             side=OrderSide.BUY,
-            time_in_force=TimeInForce.GTC
+            time_in_force=TimeInForce.DAY
         )
         order = trading_client.submit_order(order_data)
         print(f"Order executed for {target_symbol}: ID {order.id}")
