@@ -5,8 +5,6 @@ import numpy as np
 
 # Alpaca API SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -103,7 +101,6 @@ def execute_rotation(target_symbol):
     price_bars = data_client.get_stock_bars(price_request)
     current_price = float(price_bars.df.iloc[-1]['close'])
     
-    # Force whole shares by flooring the result to avoid fractional order restrictions
     shares_qty = int(available_cash / current_price)
     
     if shares_qty < 1:
@@ -112,13 +109,14 @@ def execute_rotation(target_symbol):
 
     print(f"Submitting market order for {shares_qty} whole shares of {target_symbol}...")
     
-    # 3. Submit Market Order using whole shares and explicit DAY time-in-force
-    order_data = MarketOrderRequest(
-        symbol=target_symbol,
-        qty=shares_qty,
-        side=OrderSide.BUY,
-        time_in_force=TimeInForce.DAY
-    )
+    # 3. Submit raw dictionary order payload to explicitly guarantee 'day' time_in_force
+    order_data = {
+        "symbol": target_symbol,
+        "qty": str(shares_qty),
+        "side": "buy",
+        "type": "market",
+        "time_in_force": "day"
+    }
     
     order = trading_client.submit_order(order_data)
     print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
