@@ -12,16 +12,38 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
+      - name: Debug File Structure
+        run: |
+          echo "=== CURRENT DIRECTORY ==="
+          pwd
+          echo "=== FILES IN ROOT ==="
+          ls -la
+          echo "=== SEARCHING FOR BOT.PY ==="
+          find . -name "bot.py"
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install -r TQQQ-and-SQQQ-Bot-/requirements.txt || pip install -r requirements.txt
+        run: |
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          elif [ -f "TQQQ-and-SQQQ-Bot-/requirements.txt" ]; then
+            pip install -r TQQQ-and-SQQQ-Bot-/requirements.txt
+          fi
 
       - name: Run Bot
         env:
           APCA_API_KEY_ID: ${{ secrets.APCA_API_KEY_ID }}
           APCA_API_SECRET_KEY: ${{ secrets.APCA_API_SECRET_KEY }}
-        run: python TQQQ-and-SQQQ-Bot-/bot.py || python bot.py
+        run: |
+          if [ -f "bot.py" ]; then
+            python bot.py
+          elif [ -f "TQQQ-and-SQQQ-Bot-/bot.py" ]; then
+            python TQQQ-and-SQQQ-Bot-/bot.py
+          else
+            echo "Searching for bot.py..."
+            python $(find . -name "bot.py" | head -n 1)
+          fi
