@@ -8,7 +8,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
-# 1. Fetch and sanitize API credentials
+# 1. Fetch and sanitize API credentials (strips newlines/spaces)
 API_KEY = (os.getenv("API_KEY") or os.getenv("APCA_API_KEY_ID") or "").strip()
 SECRET_KEY = (os.getenv("SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") or "").strip()
 
