@@ -5,6 +5,8 @@ import numpy as np
 
 # Alpaca API SDK imports
 from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -17,7 +19,6 @@ API_KEY = os.environ.get("APO_API_KEY") or os.environ.get("APCA_API_KEY_ID")
 API_SECRET = os.environ.get("APO_API_SECRET") or os.environ.get("APCA_API_SECRET_KEY")
 
 if not API_KEY or not API_SECRET:
-    # Fallback check for standard Alpaca env variables
     API_KEY = os.environ.get("APCA_API_KEY_ID")
     API_SECRET = os.environ.get("APCA_API_SECRET_KEY")
 
@@ -33,7 +34,6 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 def fetch_market_data():
     print("Fetching latest hourly market data from Alpaca...")
     
-    # Request historical hourly bars for QQQ to calculate indicators
     request_params = StockBarsRequest(
         symbol_or_symbols=["QQQ"],
         timeframe=TimeFrame(1, TimeFrameUnit.Hour),
@@ -51,11 +51,9 @@ def fetch_market_data():
     return df
 
 def calculate_indicators(df):
-    # Calculate EMAs and RSI on QQQ hourly closes
     df['EMA9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
     
-    # Simple RSI Calculation (14-period)
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -87,7 +85,7 @@ def execute_rotation(target_symbol):
         print(f"Closing position in {current_symbol}...")
         trading_client.close_position(current_symbol)
     
-    # 2. Get available cash to buy the target asset
+    # 2. Get available cash and current price of target asset
     account = trading_client.get_account()
     available_cash = float(account.cash)
     
@@ -95,16 +93,28 @@ def execute_rotation(target_symbol):
         print("Warning: Insufficient cash available to trade.")
         return
 
-    print(f"Submitting market order for {target_symbol} using available cash...")
+    # Fetch latest price to calculate fractional share quantity accurately
+    price_request = StockBarsRequest(
+        symbol_or_symbols=[target_symbol],
+        timeframe=TimeFrame(1, TimeFrameUnit.Minute),
+        limit=1,
+        feed=DataFeed.IEX
+    )
+    price_bars = data_client.get_stock_bars(price_request)
+    current_price = float(price_bars.df.iloc[-1]['close'])
     
-    # 3. Submit Market Order using a raw dictionary payload to force time_in_force to 'day'
-    order_data = {
-        "symbol": target_symbol,
-        "notional": round(available_cash, 2),
-        "side": "buy",
-        "type": "market",
-        "time_in_force": "day"
-    }
+    # Calculate fractional share quantity using all available cash
+    shares_qty = round(available_cash / current_price, 4)
+
+    print(f"Submitting market order for {shares_qty} shares of {target_symbol}...")
+    
+    # 3. Submit Market Order using calculated qty and explicit DAY time-in-force
+    order_data = MarketOrderRequest(
+        symbol=target_symbol,
+        qty=shares_qty,
+        side=OrderSide.BUY,
+        time_in_force=TimeInForce.DAY
+    )
     
     order = trading_client.submit_order(order_data)
     print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
@@ -121,7 +131,6 @@ def run_strategy_with_execution():
     
     print(f"Latest QQQ Data | Close: {close:.2f} | EMA9: {ema9:.2f} | EMA21: {ema21:.2f} | RSI: {rsi:.2f}")
     
-    # Determine signal based on EMA trend crossover
     if ema9 > ema21:
         print("Signal: BULLISH -> Rotating to TQQQ")
         execute_rotation("TQQQ")
