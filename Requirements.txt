@@ -1,1 +1,4 @@
-from alpaca.trading.client import TradingClient
+alpaca-py
+alpaca-trade-api
+pandas
+numpy
