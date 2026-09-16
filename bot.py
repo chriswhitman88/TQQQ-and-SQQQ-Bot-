@@ -5,8 +5,6 @@ import numpy as np
 
 # Alpaca API SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -99,13 +97,14 @@ def execute_rotation(target_symbol):
 
     print(f"Submitting market order for {target_symbol} using available cash...")
     
-    # 3. Submit Market Order with time_in_force set to DAY (fixes 422 error for notional/fractional orders)
-    order_data = MarketOrderRequest(
-        symbol=target_symbol,
-        notional=available_cash,
-        side=OrderSide.BUY,
-        time_in_force=TimeInForce.DAY
-    )
+    # 3. Submit Market Order using a raw dictionary payload to force time_in_force to 'day'
+    order_data = {
+        "symbol": target_symbol,
+        "notional": round(available_cash, 2),
+        "side": "buy",
+        "type": "market",
+        "time_in_force": "day"
+    }
     
     order = trading_client.submit_order(order_data)
     print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
