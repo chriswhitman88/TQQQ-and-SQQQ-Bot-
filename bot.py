@@ -107,6 +107,7 @@ def execute_rotation(target_symbol):
         print("Warning: Available cash is less than the price of a single share.")
         return
 
+    # THIS IS THE PRINT STATEMENT YOU MUST SEE IN THE LOGS
     print(f"Submitting market order for {shares_qty} whole shares of {target_symbol}...")
     
     # 3. Submit raw dictionary order payload to explicitly guarantee 'day' time_in_force
