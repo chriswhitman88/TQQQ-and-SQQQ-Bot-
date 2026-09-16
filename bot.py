@@ -1,3 +1,5 @@
+print("DEBUG: Running the newest bot.py file successfully!")
+
 import os
 import datetime
 import pandas as pd
@@ -30,6 +32,7 @@ def get_market_data(symbol="QQQ", timeframe=TimeFrame.Hour, limit=100):
         timeframe=timeframe,
         start=start_dt,
         end=end_dt,
+        limit=limit,
         feed=DataFeed.IEX  # Explicitly prevents 403 SIP restriction errors
     )
     
