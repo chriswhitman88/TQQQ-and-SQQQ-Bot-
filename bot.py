@@ -93,7 +93,7 @@ def execute_rotation(target_symbol):
         print("Warning: Insufficient cash available to trade.")
         return
 
-    # Fetch latest price to calculate fractional share quantity accurately
+    # Fetch latest price to calculate whole share quantity
     price_request = StockBarsRequest(
         symbol_or_symbols=[target_symbol],
         timeframe=TimeFrame(1, TimeFrameUnit.Minute),
@@ -103,12 +103,16 @@ def execute_rotation(target_symbol):
     price_bars = data_client.get_stock_bars(price_request)
     current_price = float(price_bars.df.iloc[-1]['close'])
     
-    # Calculate fractional share quantity using all available cash
-    shares_qty = round(available_cash / current_price, 4)
-
-    print(f"Submitting market order for {shares_qty} shares of {target_symbol}...")
+    # Force whole shares by flooring the result to avoid fractional order restrictions
+    shares_qty = int(available_cash / current_price)
     
-    # 3. Submit Market Order using calculated qty and explicit DAY time-in-force
+    if shares_qty < 1:
+        print("Warning: Available cash is less than the price of a single share.")
+        return
+
+    print(f"Submitting market order for {shares_qty} whole shares of {target_symbol}...")
+    
+    # 3. Submit Market Order using whole shares and explicit DAY time-in-force
     order_data = MarketOrderRequest(
         symbol=target_symbol,
         qty=shares_qty,
