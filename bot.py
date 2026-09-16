@@ -1,52 +1,63 @@
-print("DEBUG: Running the newest bot.py file successfully!")
-
 import os
-import datetime
+import sys
 import pandas as pd
+import numpy as np
+
+# Alpaca API SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.data.enums import DataFeed
 
-# 1. Fetch and sanitize API credentials
-API_KEY = (os.getenv("ALPACA_API_KEY") or os.getenv("API_KEY") or os.getenv("APCA_API_KEY_ID") or "").strip()
-SECRET_KEY = (os.getenv("ALPACA_SECRET_KEY") or os.getenv("SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") or "").strip()
+print("DEBUG: Running the newest bot.py file successfully!")
 
-if not API_KEY or not SECRET_KEY:
-    raise ValueError("Missing or invalid Alpaca API credentials. Check your GitHub Secrets.")
+# 1. Load Credentials (checking environment variables)
+API_KEY = os.environ.get("APO_API_KEY") or os.environ.get("APCA_API_KEY_ID")
+API_SECRET = os.environ.get("APO_API_SECRET") or os.environ.get("APCA_API_SECRET_KEY")
 
-# 2. Initialize Alpaca clients
-trading_client = TradingClient(api_key=API_KEY, secret_key=SECRET_KEY, paper=True)
-data_client = StockHistoricalDataClient(api_key=API_KEY, secret_key=SECRET_KEY)
+if not API_KEY or not API_SECRET:
+    # Fallback check for standard Alpaca env variables
+    API_KEY = os.environ.get("APCA_API_KEY_ID")
+    API_SECRET = os.environ.get("APCA_API_SECRET_KEY")
 
-def get_market_data(symbol="QQQ", timeframe=TimeFrame.Hour, limit=100):
-    """Fetches historical stock bars using the free real-time IEX feed."""
-    end_dt = datetime.datetime.now(datetime.timezone.utc)
-    start_dt = end_dt - datetime.timedelta(days=15)
+if API_KEY:
+    API_KEY = API_KEY.strip()
+if API_SECRET:
+    API_SECRET = API_SECRET.strip()
+
+# Initialize clients (Paper trading mode enabled)
+trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
+data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+
+def fetch_market_data():
+    print("Fetching latest hourly market data from Alpaca...")
     
+    # Request historical hourly bars for QQQ to calculate indicators
     request_params = StockBarsRequest(
-        symbol_or_symbols=symbol,
-        timeframe=timeframe,
-        start=start_dt,
-        end=end_dt,
-        limit=limit,
-        feed=DataFeed.IEX  # Explicitly prevents 403 SIP restriction errors
+        symbol_or_symbols=["QQQ"],
+        timeframe=TimeFrame(1, TimeFrameUnit.Hour),
+        limit=100,
+        feed=DataFeed.IEX
     )
     
     bars = data_client.get_stock_bars(request_params)
     df = bars.df
-    if isinstance(df.index, pd.MultiIndex):
-        df = df.xs(symbol)
+    
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.xs("QQQ", level="symbol")
+        
+    df = df.reset_index()
     return df
 
 def calculate_indicators(df):
-    """Calculates EMA and RSI indicators for decision logic."""
-    df['EMA_9'] = df['close'].ewm(span=9, adjust=False).mean()
-    df['EMA_21'] = df['close'].ewm(span=21, adjust=False).mean()
+    # Calculate EMAs and RSI on QQQ hourly closes
+    df['EMA9'] = df['close'].ewm(span=9, adjust=False).mean()
+    df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
     
+    # Simple RSI Calculation (14-period)
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -55,57 +66,69 @@ def calculate_indicators(df):
     
     return df
 
+def get_current_position():
+    try:
+        position = trading_client.get_open_position("TQQQ")
+        return "TQQQ", float(position.qty)
+    except Exception:
+        try:
+            position = trading_client.get_open_position("SQQQ")
+            return "SQQQ", float(position.qty)
+        except Exception:
+            return None, 0.0
+
 def execute_rotation(target_symbol):
-    """Sells existing opposite leverage position and buys target asset."""
-    positions = trading_client.get_all_positions()
-    current_symbols = [p.symbol for p in positions]
+    current_symbol, current_qty = get_current_position()
     
-    opposite_symbol = "SQQQ" if target_symbol == "TQQQ" else "TQQQ"
-    if opposite_symbol in current_symbols:
-        print(f"Closing position in {opposite_symbol}...")
-        trading_client.close_position(opposite_symbol)
-        
-    if target_symbol in current_symbols:
-        print(f"Already holding target symbol: {target_symbol}. No trade needed.")
+    if current_symbol == target_symbol:
+        print(f"Already holding {target_symbol}. No rotation needed.")
         return
 
-    account = trading_client.get_account()
-    buying_power = float(account.buying_power)
+    # 1. Close existing position if any
+    if current_symbol:
+        print(f"Closing position in {current_symbol}...")
+        trading_client.close_position(current_symbol)
     
-    if buying_power > 100:
-        print(f"Submitting market order for {target_symbol} using available cash...")
-        order_data = MarketOrderRequest(
-            symbol=target_symbol,
-            notional=round(buying_power * 0.95, 2),
-            side=OrderSide.BUY,
-            time_in_force=TimeInForce.DAY
-        )
-        order = trading_client.submit_order(order_data)
-        print(f"Order executed for {target_symbol}: ID {order.id}")
-    else:
-        print("Insufficient buying power to execute order.")
+    # 2. Get available cash to buy the target asset
+    account = trading_client.get_account()
+    available_cash = float(account.cash)
+    
+    if available_cash < 1.0:
+        print("Warning: Insufficient cash available to trade.")
+        return
+
+    print(f"Submitting market order for {target_symbol} using available cash...")
+    
+    # 3. Submit Market Order with time_in_force set to DAY (fixes 422 error for notional/fractional orders)
+    order_data = MarketOrderRequest(
+        symbol=target_symbol,
+        notional=available_cash,
+        side=OrderSide.BUY,
+        time_in_force=TimeInForce.DAY
+    )
+    
+    order = trading_client.submit_order(order_data)
+    print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
 
 def run_strategy_with_execution():
-    """Main execution entry point."""
-    print("Fetching latest hourly market data from Alpaca...")
-    df = get_market_data("QQQ")
+    df = fetch_market_data()
     df = calculate_indicators(df)
     
     latest = df.iloc[-1]
-    ema_9 = latest['EMA_9']
-    ema_21 = latest['EMA_21']
+    close = latest['close']
+    ema9 = latest['EMA9']
+    ema21 = latest['EMA21']
     rsi = latest['RSI']
     
-    print(f"Latest QQQ Data | Close: {latest['close']:.2f} | EMA9: {ema_9:.2f} | EMA21: {ema_21:.2f} | RSI: {rsi:.2f}")
+    print(f"Latest QQQ Data | Close: {close:.2f} | EMA9: {ema9:.2f} | EMA21: {ema21:.2f} | RSI: {rsi:.2f}")
     
-    if ema_9 > ema_21 and rsi > 45:
+    # Determine signal based on EMA trend crossover
+    if ema9 > ema21:
         print("Signal: BULLISH -> Rotating to TQQQ")
         execute_rotation("TQQQ")
-    elif ema_9 < ema_21 and rsi < 55:
+    else:
         print("Signal: BEARISH -> Rotating to SQQQ")
         execute_rotation("SQQQ")
-    else:
-        print("Signal: NEUTRAL -> Holding current positions.")
 
 if __name__ == "__main__":
     run_strategy_with_execution()
