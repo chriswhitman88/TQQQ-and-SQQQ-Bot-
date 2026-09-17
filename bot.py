@@ -2,6 +2,7 @@ import os
 import sys
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
@@ -28,12 +29,15 @@ data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 def fetch_market_data():
     print("Fetching latest hourly market data from Alpaca...")
     request_params = StockBarsRequest(
-        symbol_or_symbols=["QQQ"], timeframe=TimeFrame(1, TimeFrameUnit.Hour), limit=100, feed=DataFeed.IEX
+        symbol_or_symbols=["QQQ"], 
+        timeframe=TimeFrame(1, TimeFrameUnit.Hour), 
+        start=datetime.now() - timedelta(days=7),
+        feed=DataFeed.IEX
     )
     bars = data_client.get_stock_bars(request_params)
     df = bars.df
     
-    # --- SAFEGUARDS TO PREVENT 'CLOSE' KEYERROR ---
+    # --- SAFEGUARDS TO PREVENT EMPTY DATAFRAMES & KEYERRORS ---
     if df is None or df.empty:
         raise ValueError("Fetched empty DataFrame from Alpaca! Check network or market status.")
         
@@ -45,7 +49,7 @@ def fetch_market_data():
             
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    # ----------------------------------------------
+    # ----------------------------------------------------------
 
     return df.reset_index()
 
