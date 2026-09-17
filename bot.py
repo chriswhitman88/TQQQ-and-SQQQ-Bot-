@@ -32,8 +32,21 @@ def fetch_market_data():
     )
     bars = data_client.get_stock_bars(request_params)
     df = bars.df
+    
+    # --- SAFEGUARDS TO PREVENT 'CLOSE' KEYERROR ---
+    if df is None or df.empty:
+        raise ValueError("Fetched empty DataFrame from Alpaca! Check network or market status.")
+        
+    if isinstance(df.index, pd.MultiIndex):
+        if "symbol" in df.index.names:
+            df = df.xs("QQQ", level="symbol")
+        else:
+            df = df.reset_index(level=0, drop=True)
+            
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.xs("QQQ", level="symbol")
+        df.columns = df.columns.get_level_values(0)
+    # ----------------------------------------------
+
     return df.reset_index()
 
 def calculate_indicators(df):
