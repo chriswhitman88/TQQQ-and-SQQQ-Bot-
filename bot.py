@@ -3,6 +3,7 @@ import sys
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
@@ -31,7 +32,7 @@ def fetch_market_data():
     request_params = StockBarsRequest(
         symbol_or_symbols=["QQQ"], 
         timeframe=TimeFrame(1, TimeFrameUnit.Hour), 
-        start=datetime.now() - timedelta(days=7),
+        start=datetime.now() - timedelta(days=10), # Pull extra days to ensure enough full market days after filtering
         feed=DataFeed.IEX
     )
     bars = data_client.get_stock_bars(request_params)
@@ -51,7 +52,24 @@ def fetch_market_data():
         df.columns = df.columns.get_level_values(0)
     # ----------------------------------------------------------
 
-    return df.reset_index()
+    df = df.reset_index()
+
+    # --- TIMEZONE & MARKET HOURS FILTER ---
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    if df['timestamp'].dt.tz is None:
+        df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+    
+    df['timestamp_et'] = df['timestamp'].dt.tz_convert(ZoneInfo("America/New_York"))
+    
+    # Filter strictly for standard market hours (9:30 AM to 4:00 PM Eastern Time)
+    df = df[
+        (df['timestamp_et'].dt.hour >= 9) & 
+        (df['timestamp_et'].dt.hour <= 16)
+    ]
+    df = df[~((df['timestamp_et'].dt.hour == 9) & (df['timestamp_et'].dt.minute < 30))]
+    df = df[~((df['timestamp_et'].dt.hour == 16) & (df['timestamp_et'].dt.minute > 0))]
+    
+    return df
 
 def calculate_indicators(df):
     df['EMA9'] = df['close'].ewm(span=9, adjust=False).mean()
@@ -116,6 +134,12 @@ def execute_rotation(target_symbol):
     print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
 
 def run_strategy_with_execution():
+    # --- SAFEGUARD: CHECK IF MARKET IS OPEN BEFORE DOING ANYTHING ---
+    clock = trading_client.get_clock()
+    if not clock.is_open:
+        print(f"Market is currently CLOSED. Skipping execution. (Next open: {clock.next_open})")
+        return
+
     df = fetch_market_data()
     df = calculate_indicators(df)
     latest = df.iloc[-1]
