@@ -1,4 +1,4 @@
-Name: Hourly TQQQ Paper Bot
+name: Hourly TQQQ Paper Bot
 
 on:
   schedule:
