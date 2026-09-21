@@ -1,8 +1,9 @@
-name: Hourly TQQQ Paper Bot
+Name: Hourly TQQQ Paper Bot
 
 on:
   schedule:
-    - cron: '0 * * * 1-5'
+    # Runs every hour from 13:00 to 21:00 UTC (covers 9:30 AM - 4:00 PM ET in both EST and EDT)
+    - cron: '0 13-21 * * 1-5'
   workflow_dispatch:
 
 jobs:
