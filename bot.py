@@ -134,10 +134,26 @@ def execute_rotation(target_symbol):
     print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
 
 def run_strategy_with_execution():
-    # --- SAFEGUARD: CHECK IF MARKET IS OPEN BEFORE DOING ANYTHING ---
+    # --- STRICT WALL-CLOCK SAFEGUARD (9:30 AM - 4:00 PM ET, MON-FRI) ---
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    
+    # 1. Block weekends (Saturday = 5, Sunday = 6)
+    if now_et.weekday() >= 5:
+        print(f"Weekend detected ({now_et.strftime('%A')}). Skipping execution.")
+        return
+        
+    # 2. Block outside 9:30 AM - 4:00 PM ET
+    market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    if not (market_open <= now_et <= market_close):
+        print(f"Current time ({now_et.strftime('%H:%M:%S %Z')}) is outside regular market hours. Skipping.")
+        return
+
+    # 3. Double-check Alpaca's official clock state
     clock = trading_client.get_clock()
     if not clock.is_open:
-        print(f"Market is currently CLOSED. Skipping execution. (Next open: {clock.next_open})")
+        print(f"Alpaca market clock indicates CLOSED. Skipping execution. (Next open: {clock.next_open})")
         return
 
     df = fetch_market_data()
