@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -12,7 +13,7 @@ from alpaca.data.enums import DataFeed
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 
-print("DEBUG: Running the newest bot.py file successfully!")
+print("DEBUG: Running the newest hybrid-safe bot.py file successfully!")
 
 API_KEY = os.environ.get("APO_API_KEY") or os.environ.get("APCA_API_KEY_ID")
 API_SECRET = os.environ.get("APO_API_SECRET") or os.environ.get("APCA_API_SECRET_KEY")
@@ -32,7 +33,7 @@ def fetch_market_data():
     request_params = StockBarsRequest(
         symbol_or_symbols=["QQQ"], 
         timeframe=TimeFrame(1, TimeFrameUnit.Hour), 
-        start=datetime.now() - timedelta(days=10), # Pull extra days to ensure enough full market days after filtering
+        start=datetime.now() - timedelta(days=10), 
         feed=DataFeed.IEX
     )
     bars = data_client.get_stock_bars(request_params)
@@ -98,15 +99,38 @@ def execute_rotation(target_symbol):
         print(f"Already holding {target_symbol}. No rotation needed.")
         return
 
+    # --- PDT HYBRID BUFFER CHECK ---
+    account = trading_client.get_account()
+    day_trades_recorded = int(account.day_trade_count)
+    print(f"Current Alpaca Rolling Day Trade Count: {day_trades_recorded}/3")
+
+    # If we already have 2 day trades, enforce a restriction on opening brand new positions same-day
+    if day_trades_recorded >= 2 and current_symbol is None:
+        print("PDT Safety Buffer Active: You have reached 2 day trades. Blocking new same-day entries to protect against PDT violation. Shifting to overnight swing mode.")
+        return
+
     if current_symbol:
         print(f"Closing position in {current_symbol}...")
         trading_client.close_position(current_symbol)
-    
+        
+        # --- WAIT FOR POSITION TO FULLY CLOSE (PREVENTS RACE CONDITIONS) ---
+        max_retries = 15
+        for attempt in range(max_retries):
+            sym, qty = get_current_position()
+            if not sym:
+                print("Position successfully closed and cleared.")
+                break
+            print(f"Waiting for close order to fill... (Attempt {attempt+1}/{max_retries})")
+            time.sleep(2)
+        else:
+            print("Warning: Close order is taking longer than expected. Proceeding...")
+
+    # Re-fetch account details post-liquidation to get accurate buying power
     account = trading_client.get_account()
-    available_cash = float(account.cash)
+    available_cash = float(account.buying_power)
     
     if available_cash < 1.0:
-        print("Warning: Insufficient cash available to trade.")
+        print("Warning: Insufficient buying power available to trade.")
         return
 
     price_request = StockBarsRequest(
@@ -118,7 +142,7 @@ def execute_rotation(target_symbol):
     shares_qty = int(available_cash / current_price)
     
     if shares_qty < 1:
-        print("Warning: Available cash is less than the price of a single share.")
+        print("Warning: Available buying power is less than the price of a single share.")
         return
 
     print(f"Submitting market order for {shares_qty} whole shares of {target_symbol}...")
@@ -130,19 +154,20 @@ def execute_rotation(target_symbol):
         time_in_force=TimeInForce.DAY
     )
     
-    order = trading_client.submit_order(order_req)
-    print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
+    try:
+        order = trading_client.submit_order(order_req)
+        print(f"Successfully ordered {target_symbol}! Order ID: {order.id}")
+    except Exception as e:
+        print(f"Alpaca Server Safety Net Triggered / Order Rejected: {e}")
 
 def run_strategy_with_execution():
     # --- STRICT WALL-CLOCK SAFEGUARD (9:30 AM - 4:00 PM ET, MON-FRI) ---
     now_et = datetime.now(ZoneInfo("America/New_York"))
     
-    # 1. Block weekends (Saturday = 5, Sunday = 6)
     if now_et.weekday() >= 5:
         print(f"Weekend detected ({now_et.strftime('%A')}). Skipping execution.")
         return
         
-    # 2. Block outside 9:30 AM - 4:00 PM ET
     market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
     market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
     
@@ -150,7 +175,6 @@ def run_strategy_with_execution():
         print(f"Current time ({now_et.strftime('%H:%M:%S %Z')}) is outside regular market hours. Skipping.")
         return
 
-    # 3. Double-check Alpaca's official clock state
     clock = trading_client.get_clock()
     if not clock.is_open:
         print(f"Alpaca market clock indicates CLOSED. Skipping execution. (Next open: {clock.next_open})")
