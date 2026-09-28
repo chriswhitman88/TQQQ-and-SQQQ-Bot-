@@ -101,7 +101,11 @@ def execute_rotation(target_symbol):
 
     # --- PDT HYBRID BUFFER CHECK ---
     account = trading_client.get_account()
-    day_trades_recorded = int(account.day_trade_count)
+    
+    # Safely check for either attribute name version to prevent breaking updates
+    raw_count = getattr(account, "daytrade_count", getattr(account, "day_trade_count", 0))
+    day_trades_recorded = int(raw_count) if raw_count is not None else 0
+    
     print(f"Current Alpaca Rolling Day Trade Count: {day_trades_recorded}/3")
 
     # If we already have 2 day trades, enforce a restriction on opening brand new positions same-day
