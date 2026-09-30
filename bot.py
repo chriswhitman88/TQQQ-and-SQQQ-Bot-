@@ -15,12 +15,8 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 
 print("DEBUG: Running the newest hybrid-safe bot.py file successfully!")
 
-API_KEY = os.environ.get("APO_API_KEY") or os.environ.get("APCA_API_KEY_ID")
-API_SECRET = os.environ.get("APO_API_SECRET") or os.environ.get("APCA_API_SECRET_KEY")
-
-if not API_KEY or not API_SECRET:
-    API_KEY = os.environ.get("APCA_API_KEY_ID")
-    API_SECRET = os.environ.get("APCA_API_SECRET_KEY")
+API_KEY = "PKGPXQZKQOJFEXMSIIXLQL53PL"
+API_SECRET = "ADRUKQ5Sixsbd9vN16XTyD1MpD4aWJi6NNRn1YxpZqGN"
 
 if API_KEY: API_KEY = API_KEY.strip()
 if API_SECRET: API_SECRET = API_SECRET.strip()
